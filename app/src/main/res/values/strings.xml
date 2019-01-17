@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">南工群智感知</string>
+
+    <string-array name="tab_title">
+        <item>获取任务</item>
+        <item>执行任务</item>
+        <item>个人中心</item>
+    </string-array>
+
+</resources>
