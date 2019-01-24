@@ -71,6 +71,8 @@ public class GetTaskFragment extends Fragment {
     boolean isFirstLocation = true;
     float curLat = 0, curLng = 0;
     float taskLat = 0, taskLng = 0;
+    String taskType;
+    int taskId;
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
@@ -153,7 +155,7 @@ public class GetTaskFragment extends Fragment {
                         String response = HttpPostUtils.doPostRequest("/task/getTask", userLoc);
                         Message message = Message.obtain();
                         message.obj = response;
-                        mHanlder.sendMessage(message);
+                        getHanlder.sendMessage(message);
                     }
                 }.start();
             }
@@ -166,37 +168,24 @@ public class GetTaskFragment extends Fragment {
                     Toast.makeText(getActivity(), "定位异常，请重新获取任务。。。", Toast.LENGTH_SHORT).show();
                     return;
                 }
-                SharedPreferences.Editor editor = share.edit();
-                editor.putFloat("latitude", taskLat);
-                editor.putFloat("longitude", taskLng);
-                editor.apply();
-                ((MainActivity) getActivity()).getTabHost().setCurrentTab(1);
+
+                final String requestData = "latitude=" + curLat + "&longitude=" + curLng + "&taskId=" + taskId;
+                    /*这里需要留意的是httpPostUtils请求在Android里面不能放在主线程里面，必须新建一个子线程，然后通过Hanlder把子线程的值传过来更新UI（因为子线程不能直接更改UI）*/
+                new Thread() {
+                    public void run() {
+                        String response = HttpPostUtils.doPostRequest("/task/acceptTask", requestData);
+                        Message message = Message.obtain();
+                        message.obj = response;
+                        acceptHanlder.sendMessage(message);
+                    }
+                }.start();
             }
         });
     }
 
-    private class splashhandler implements Runnable {
-        public void run() {
-            // 定位初始化
-            mLocClient = new LocationClient(getActivity());
-            LocationClientOption option = new LocationClientOption();
-            option.setOpenGps(true); // 打开gps
-            option.setCoorType("bd09ll"); // 设置坐标类型
-            option.setIsNeedAddress(true);
-            option.setIsNeedLocationPoiList(true);
-            mLocClient.setLocOption(option);
-            mLocClient.registerLocationListener(myListener);
-
-            mPoiSearch = PoiSearch.newInstance();
-            mPoiSearch.setOnGetPoiSearchResultListener(myPoiListener);
-            mLocClient.start();
-        }
-    }
-
-
     private String result;
 
-    private Handler mHanlder = new Handler() {
+    private Handler getHanlder = new Handler() {
         @Override
         public void handleMessage(Message message) {
             result = (String) message.obj;
@@ -205,9 +194,18 @@ public class GetTaskFragment extends Fragment {
                 return;
             }
             JSONObject resultJson = JSON.parseObject(result);
-            taskLat = Float.parseFloat(resultJson.getString("latitude"));
-            taskLng = Float.parseFloat(resultJson.getString("longitude"));
+            taskLat = resultJson.getFloat("latitude");
+            taskLng = resultJson.getFloat("longitude");
+            taskType = resultJson.getString("taskType");
+            taskId = resultJson.getInteger("taskId");
             System.out.println("收到服务器任务，维度：" + taskLat + ",经度：" + taskLng);
+
+            textString.append("\n 维度区间 : ");
+            textString.append((float) (Math.round((taskLat - 0.0001) * 10000)) / 10000 + "-" + (float) (Math.round((taskLat + 0.0001) * 10000)) / 10000);
+            textString.append("\n 经度区间 : ");
+            textString.append((float) (Math.round((taskLng - 0.0001) * 10000)) / 10000 + "-" + (float) (Math.round((taskLng + 0.0001) * 10000)) / 10000);
+            textString.append("\n 任务距离 : " + Math.round(DistanceUtil.getDistance(new LatLng(curLat, curLng), new LatLng(taskLat, taskLng)) * 10) / 10 + "米");
+            textString.append("\n 任务内容 : " + taskType);
 
             PoiNearbySearchOption nearbySearchOption = new PoiNearbySearchOption();
             nearbySearchOption.location(new LatLng(taskLat, taskLng));
@@ -215,13 +213,28 @@ public class GetTaskFragment extends Fragment {
             nearbySearchOption.radius(300);// 检索半径，单位是米
             nearbySearchOption.sortType(PoiSortType.distance_from_near_to_far);
             mPoiSearch.searchNearby(nearbySearchOption);// 发起附近检索请求
+        }
+    };
 
-            textString.append("\n 维度区间 : ");
-            textString.append((float) (Math.round((taskLat - 0.0001) * 10000)) / 10000 + "-" + (float) (Math.round((taskLat + 0.0001) * 10000)) / 10000);
-            textString.append("\n 经度区间 : ");
-            textString.append((float) (Math.round((taskLng - 0.0001) * 10000)) / 10000 + "-" + (float) (Math.round((taskLng + 0.0001) * 10000)) / 10000);
-            textString.append("\n 任务距离 : " + Math.round(DistanceUtil.getDistance(new LatLng(curLat, curLng), new LatLng(taskLat, taskLng)) * 10) / 10 + "米");
-            textString.append("\n 任务内容 : 拍摄照片");
+    private Handler acceptHanlder = new Handler() {
+        @Override
+        public void handleMessage(Message message) {
+            result = (String) message.obj;
+            if (result == null) {
+                Toast.makeText(getActivity(), "连接边缘节点失败", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            JSONObject resultJson = JSON.parseObject(result);
+            String result = resultJson.getString("result");
+            if (result.equals("success")) {
+                SharedPreferences.Editor editor = share.edit();
+                editor.putFloat("latitude", taskLat);
+                editor.putFloat("longitude", taskLng);
+                editor.putString("taskType", taskType);
+                editor.putInt("taskId", taskId);
+                editor.apply();
+                ((MainActivity) getActivity()).getTabHost().setCurrentTab(1);
+            }
         }
     };
 
@@ -280,48 +293,9 @@ public class GetTaskFragment extends Fragment {
             }
         }
     }
-    /*public class MyLocationListenner implements BDLocationListener {
-        @Override
-        public void onReceiveLocation(BDLocation location) {
-            if (location == null || mMapView == null) {
-                return;
-            }
-            if (isFirstLocation) {
-                isFirstLocation = false;
-                // map view 销毁后不在处理新接收的位置
-                Log.i("Get Task Location", "latitude = " + location.getLatitude() + "," + "longitude = " + location.getLongitude());
-                SharedPreferences.Editor editor = share.edit();
-                editor.putFloat("curLatitude", (float) location.getLatitude());
-                editor.putFloat("curLongitude", (float) location.getLongitude());
-                editor.apply();
-
-                Random random = new Random();
-                float latOffset = random.nextInt(50 + 50 + 1) - 50;
-                float lngOffset = random.nextInt(50 + 50 + 1) - 50;
-                taskLat = (float) location.getLatitude() + latOffset / 10000;
-                taskLng = (float) location.getLongitude() + lngOffset / 10000;
-                taskLatLng = new LatLng(taskLat, taskLng);
-
-                PoiNearbySearchOption nearbySearchOption = new PoiNearbySearchOption();
-                nearbySearchOption.location(taskLatLng);
-                nearbySearchOption.keyword("餐厅");
-                nearbySearchOption.radius(300);// 检索半径，单位是米
-                nearbySearchOption.sortType(PoiSortType.distance_from_near_to_far);
-                mPoiSearch.searchNearby(nearbySearchOption);// 发起附近检索请求
-
-                textString.append("\n 维度区间 : ");
-                textString.append((float) (Math.round((taskLat - 0.0001) * 10000)) / 10000 + "-" + (float) (Math.round((taskLat + 0.0001) * 10000)) / 10000);
-                textString.append("\n 经度区间 : ");
-                textString.append((float) (Math.round((taskLng - 0.0001) * 10000)) / 10000 + "-" + (float) (Math.round((taskLng + 0.0001) * 10000)) / 10000);
-                textString.append("\n 任务距离 : " + Math.round(DistanceUtil.getDistance(new LatLng(location.getLatitude(), location.getLongitude()), taskLatLng) * 10) / 10 + "米");
-                textString.append("\n 任务内容 : 拍摄照片");
-            }
-        }
-
-    }*/
 
     /**
-     * 定位SDK监听函数
+     * 兴趣的SDK监听函数
      */
     public class MyPoiSearchListenner implements OnGetPoiSearchResultListener {
         @Override
@@ -329,7 +303,7 @@ public class GetTaskFragment extends Fragment {
             if (isFirstPoi) {
                 Log.i("onGetPoiResult", poiResult.toString());
                 if (poiResult == null || poiResult.error == SearchResult.ERRORNO.RESULT_NOT_FOUND) {// 没有找到检索结果
-                    Toast.makeText(getActivity(), "定位异常，请重新获取任务", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(getActivity(), "暂时没有附近的任务", Toast.LENGTH_SHORT).show();
                     taskInfoTextView.setText(" 任务地址 :\n 维度区间：\n 经度区间：\n 任务距离：\n 任务内容:");
                     taskLat = 0;
                     taskLng = 0;
@@ -351,7 +325,6 @@ public class GetTaskFragment extends Fragment {
                     mBaiduMap.animateMapStatus(MapStatusUpdateFactory.newMapStatus(builder.build()));
                 }
             }
-
         }
 
         @Override
@@ -397,7 +370,6 @@ public class GetTaskFragment extends Fragment {
     public void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         mMapView.onSaveInstanceState(outState);
-
     }
 }
 
